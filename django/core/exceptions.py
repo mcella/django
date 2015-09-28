@@ -1,14 +1,21 @@
 """
 Global Django exception and warning classes.
 """
-from functools import reduce
-import operator
-
 from django.utils import six
 from django.utils.encoding import force_text
 
 
+class FieldDoesNotExist(Exception):
+    """The requested model field does not exist"""
+    pass
+
+
 class DjangoRuntimeWarning(RuntimeWarning):
+    pass
+
+
+class AppRegistryNotReady(Exception):
+    """The django.apps registry is not populated yet"""
     pass
 
 
@@ -113,7 +120,10 @@ class ValidationError(Exception):
                 # Normalize plain strings to instances of ValidationError.
                 if not isinstance(message, ValidationError):
                     message = ValidationError(message)
-                self.error_list.extend(message.error_list)
+                if hasattr(message, 'error_dict'):
+                    self.error_list.extend(sum(message.error_dict.values(), []))
+                else:
+                    self.error_list.extend(message.error_list)
 
         else:
             self.message = message
@@ -132,18 +142,15 @@ class ValidationError(Exception):
     @property
     def messages(self):
         if hasattr(self, 'error_dict'):
-            return reduce(operator.add, dict(self).values())
+            return sum(dict(self).values(), [])
         return list(self)
 
     def update_error_dict(self, error_dict):
         if hasattr(self, 'error_dict'):
-            if error_dict:
-                for field, errors in self.error_dict.items():
-                    error_dict.setdefault(field, []).extend(errors)
-            else:
-                error_dict = self.error_dict
+            for field, error_list in self.error_dict.items():
+                error_dict.setdefault(field, []).extend(error_list)
         else:
-            error_dict[NON_FIELD_ERRORS] = self.error_list
+            error_dict.setdefault(NON_FIELD_ERRORS, []).extend(self.error_list)
         return error_dict
 
     def __iter__(self):

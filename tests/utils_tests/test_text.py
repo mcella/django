@@ -1,11 +1,61 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
+import json
+
 from django.test import SimpleTestCase
 from django.utils import six, text
+from django.utils.encoding import force_text
+from django.utils.functional import lazy
+from django.utils.translation import override
+
+lazystr = lazy(force_text, six.text_type)
+
+IS_WIDE_BUILD = (len('\U0001F4A9') == 1)
 
 
 class TestUtilsText(SimpleTestCase):
+
+    def test_get_text_list(self):
+        self.assertEqual(text.get_text_list(['a', 'b', 'c', 'd']), 'a, b, c or d')
+        self.assertEqual(text.get_text_list(['a', 'b', 'c'], 'and'), 'a, b and c')
+        self.assertEqual(text.get_text_list(['a', 'b'], 'and'), 'a and b')
+        self.assertEqual(text.get_text_list(['a']), 'a')
+        self.assertEqual(text.get_text_list([]), '')
+        with override('ar'):
+            self.assertEqual(text.get_text_list(['a', 'b', 'c']), "a، b أو c")
+
+    def test_smart_split(self):
+        testdata = [
+            ('This is "a person" test.',
+                ['This', 'is', '"a person"', 'test.']),
+            ('This is "a person\'s" test.',
+                ['This', 'is', '"a person\'s"', 'test.']),
+            ('This is "a person\\"s" test.',
+                ['This', 'is', '"a person\\"s"', 'test.']),
+            ('"a \'one',
+                ['"a', "'one"]),
+            ('all friends\' tests',
+                ['all', 'friends\'', 'tests']),
+            ('url search_page words="something else"',
+                ['url', 'search_page', 'words="something else"']),
+            ("url search_page words='something else'",
+                ['url', 'search_page', "words='something else'"]),
+            ('url search_page words "something else"',
+                ['url', 'search_page', 'words', '"something else"']),
+            ('url search_page words-"something else"',
+                ['url', 'search_page', 'words-"something else"']),
+            ('url search_page words=hello',
+                ['url', 'search_page', 'words=hello']),
+            ('url search_page words="something else',
+                ['url', 'search_page', 'words="something', 'else']),
+            ("cut:','|cut:' '",
+                ["cut:','|cut:' '"]),
+            (lazystr("a b c d"),  # Test for #20231
+                ['a', 'b', 'c', 'd']),
+        ]
+        for test, expected in testdata:
+            self.assertEqual(list(text.smart_split(test)), expected)
 
     def test_truncate_chars(self):
         truncator = text.Truncator(
@@ -122,11 +172,16 @@ class TestUtilsText(SimpleTestCase):
 
     def test_slugify(self):
         items = (
-            ('Hello, World!', 'hello-world'),
-            ('spam & eggs', 'spam-eggs'),
+            # given - expected - unicode?
+            ('Hello, World!', 'hello-world', False),
+            ('spam & eggs', 'spam-eggs', False),
+            ('spam & ıçüş', 'spam-ıçüş', True),
+            ('foo ıç bar', 'foo-ıç-bar', True),
+            ('    foo ıç bar', 'foo-ıç-bar', True),
+            ('你好', '你好', True),
         )
-        for value, output in items:
-            self.assertEqual(text.slugify(value), output)
+        for value, output, is_unicode in items:
+            self.assertEqual(text.slugify(value, allow_unicode=is_unicode), output)
 
     def test_unescape_entities(self):
         items = [
@@ -144,3 +199,12 @@ class TestUtilsText(SimpleTestCase):
     def test_get_valid_filename(self):
         filename = "^&'@{}[],$=!-#()%+~_123.txt"
         self.assertEqual(text.get_valid_filename(filename), "-_123.txt")
+
+    def test_compress_sequence(self):
+        data = [{'key': i} for i in range(10)]
+        seq = list(json.JSONEncoder().iterencode(data))
+        seq = [s.encode('utf-8') for s in seq]
+        actual_length = len(b''.join(seq))
+        out = text.compress_sequence(seq)
+        compressed_length = len(b''.join(out))
+        self.assertTrue(compressed_length < actual_length)

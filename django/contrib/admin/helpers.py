@@ -1,21 +1,24 @@
 from __future__ import unicode_literals
 
+import warnings
+
 from django import forms
-from django.contrib.admin.utils import (flatten_fieldsets, lookup_field,
-    display_for_field, label_for_field, help_text_for_field)
+from django.conf import settings
 from django.contrib.admin.templatetags.admin_static import static
-from django.contrib.contenttypes.models import ContentType
+from django.contrib.admin.utils import (
+    display_for_field, flatten_fieldsets, help_text_for_field, label_for_field,
+    lookup_field,
+)
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models.fields.related import ManyToManyRel
 from django.forms.utils import flatatt
-from django.template.defaultfilters import capfirst
+from django.template.defaultfilters import capfirst, linebreaksbr
+from django.utils import six
+from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.encoding import force_text, smart_text
 from django.utils.html import conditional_escape, format_html
 from django.utils.safestring import mark_safe
-from django.utils import six
 from django.utils.translation import ugettext_lazy as _
-from django.conf import settings
-
 
 ACTION_CHECKBOX_NAME = '_selected_action'
 
@@ -70,7 +73,7 @@ class Fieldset(object):
     def _media(self):
         if 'collapse' in self.classes:
             extra = '' if settings.DEBUG else '.min'
-            js = ['jquery%s.js' % extra,
+            js = ['vendor/jquery/jquery%s.js' % extra,
                   'jquery.init.js',
                   'collapse%s.js' % extra]
             return forms.Media(js=[static('admin/js/%s' % url) for url in js])
@@ -106,7 +109,10 @@ class Fieldline(object):
                 yield AdminField(self.form, field, is_first=(i == 0))
 
     def errors(self):
-        return mark_safe('\n'.join(self.form[f].errors.as_ul() for f in self.fields if f not in self.readonly_fields).strip('\n'))
+        return mark_safe(
+            '\n'.join(self.form[f].errors.as_ul()
+            for f in self.fields if f not in self.readonly_fields).strip('\n')
+        )
 
 
 class AdminField(object):
@@ -114,6 +120,7 @@ class AdminField(object):
         self.field = form[field]  # A django.forms.BoundField instance
         self.is_first = is_first  # Whether this field is first on the line
         self.is_checkbox = isinstance(self.field.field.widget, forms.CheckboxInput)
+        self.is_readonly = False
 
     def label_tag(self):
         classes = []
@@ -137,7 +144,6 @@ class AdminField(object):
 
 class AdminReadonlyField(object):
     def __init__(self, form, field, is_first, model_admin=None):
-        label = label_for_field(field, form._meta.model, model_admin)
         # Make self.field look a little bit like a field. This means that
         # {{ field.name }} must be a useful class name to identify the field.
         # For convenience, store other field-related data here too.
@@ -145,49 +151,71 @@ class AdminReadonlyField(object):
             class_name = field.__name__ if field.__name__ != '<lambda>' else ''
         else:
             class_name = field
+
+        if form._meta.labels and class_name in form._meta.labels:
+            label = form._meta.labels[class_name]
+        else:
+            label = label_for_field(field, form._meta.model, model_admin)
+
+        if form._meta.help_texts and class_name in form._meta.help_texts:
+            help_text = form._meta.help_texts[class_name]
+        else:
+            help_text = help_text_for_field(class_name, form._meta.model)
+
         self.field = {
             'name': class_name,
             'label': label,
+            'help_text': help_text,
             'field': field,
-            'help_text': help_text_for_field(class_name, form._meta.model)
         }
         self.form = form
         self.model_admin = model_admin
         self.is_first = is_first
         self.is_checkbox = False
         self.is_readonly = True
+        self.empty_value_display = model_admin.get_empty_value_display()
 
     def label_tag(self):
         attrs = {}
         if not self.is_first:
             attrs["class"] = "inline"
         label = self.field['label']
-        return format_html('<label{0}>{1}:</label>',
+        return format_html('<label{}>{}:</label>',
                            flatatt(attrs),
                            capfirst(force_text(label)))
 
     def contents(self):
         from django.contrib.admin.templatetags.admin_list import _boolean_icon
-        from django.contrib.admin.views.main import EMPTY_CHANGELIST_VALUE
         field, obj, model_admin = self.field['field'], self.form.instance, self.model_admin
         try:
             f, attr, value = lookup_field(field, obj, model_admin)
         except (AttributeError, ValueError, ObjectDoesNotExist):
-            result_repr = EMPTY_CHANGELIST_VALUE
+            result_repr = self.empty_value_display
         else:
             if f is None:
                 boolean = getattr(attr, "boolean", False)
                 if boolean:
                     result_repr = _boolean_icon(value)
                 else:
-                    result_repr = smart_text(value)
-                    if getattr(attr, "allow_tags", False):
-                        result_repr = mark_safe(result_repr)
+                    if hasattr(value, "__html__"):
+                        result_repr = value
+                    else:
+                        result_repr = smart_text(value)
+                        if getattr(attr, "allow_tags", False):
+                            warnings.warn(
+                                "Deprecated allow_tags attribute used on %s. "
+                                "Use django.utils.safestring.format_html(), "
+                                "format_html_join(), or mark_safe() instead." % attr,
+                                RemovedInDjango20Warning
+                            )
+                            result_repr = mark_safe(value)
+                        else:
+                            result_repr = linebreaksbr(result_repr)
             else:
-                if isinstance(f.rel, ManyToManyRel) and value is not None:
+                if isinstance(f.remote_field, ManyToManyRel) and value is not None:
                     result_repr = ", ".join(map(six.text_type, value.all()))
                 else:
-                    result_repr = display_for_field(value, f)
+                    result_repr = display_for_field(value, f, self.empty_value_display)
         return conditional_escape(result_repr)
 
 
@@ -256,8 +284,6 @@ class InlineAdminForm(AdminForm):
         self.formset = formset
         self.model_admin = model_admin
         self.original = original
-        if original is not None:
-            self.original_content_type_id = ContentType.objects.get_for_model(original).pk
         self.show_url = original and view_on_site_url is not None
         self.absolute_url = view_on_site_url
         super(InlineAdminForm, self).__init__(form, fieldsets, prepopulated_fields,
@@ -278,18 +304,6 @@ class InlineAdminForm(AdminForm):
             if parent._meta.has_auto_field:
                 return True
         return False
-
-    def field_count(self):
-        # tabular.html uses this function for colspan value.
-        num_of_fields = 0
-        if self.has_auto_field():
-            num_of_fields += 1
-        num_of_fields += len(self.fieldsets[0][1]["fields"])
-        if self.formset.can_order:
-            num_of_fields += 1
-        if self.formset.can_delete:
-            num_of_fields += 1
-        return num_of_fields
 
     def pk_field(self):
         return AdminField(self.form, self.formset._pk_field.name, False)
@@ -332,8 +346,8 @@ class AdminErrorList(forms.utils.ErrorList):
         super(AdminErrorList, self).__init__()
 
         if form.is_bound:
-            self.extend(list(six.itervalues(form.errors)))
+            self.extend(form.errors.values())
             for inline_formset in inline_formsets:
                 self.extend(inline_formset.non_form_errors())
                 for errors_in_inline_form in inline_formset.errors:
-                    self.extend(list(six.itervalues(errors_in_inline_form)))
+                    self.extend(errors_in_inline_form.values())

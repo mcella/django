@@ -36,11 +36,19 @@ Use standard DB optimization techniques
 
 ...including:
 
-* Indexes. This is a number one priority, *after* you have determined from
+* Indexes_. This is a number one priority, *after* you have determined from
   profiling what indexes should be added. Use
-  :attr:`django.db.models.Field.db_index` or
+  :attr:`Field.db_index <django.db.models.Field.db_index>` or
   :attr:`Meta.index_together <django.db.models.Options.index_together>` to add
-  these from Django.
+  these from Django. Consider adding indexes to fields that you frequently
+  query using :meth:`~django.db.models.query.QuerySet.filter()`,
+  :meth:`~django.db.models.query.QuerySet.exclude()`,
+  :meth:`~django.db.models.query.QuerySet.order_by()`, etc. as indexes may help
+  to speed up lookups. Note that determining the best indexes is a complex
+  database-dependent topic that will depend on your particular application.
+  The overhead of maintaining an index may outweigh any gains in query speed.
+
+.. _Indexes: https://en.wikipedia.org/wiki/Database_index
 
 * Appropriate use of field types.
 
@@ -122,12 +130,12 @@ For instance:
 
 If these aren't enough to generate the SQL you need:
 
-Use ``QuerySet.extra()``
-------------------------
+Use ``RawSQL``
+--------------
 
-A less portable but more powerful method is
-:meth:`~django.db.models.query.QuerySet.extra()`, which allows some SQL to be
-explicitly added to the query. If that still isn't powerful enough:
+A less portable but more powerful method is the
+:class:`~django.db.models.expressions.RawSQL` expression, which allows some SQL
+to be explicitly added to the query. If that still isn't powerful enough:
 
 Use raw SQL
 -----------

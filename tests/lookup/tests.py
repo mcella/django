@@ -1,12 +1,15 @@
 from __future__ import unicode_literals
 
+import collections
 from datetime import datetime
 from operator import attrgetter
+from unittest import skipUnless
 
 from django.core.exceptions import FieldError
-from django.test import TestCase, skipUnlessDBFeature
+from django.db import connection
+from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 
-from .models import Author, Article, Tag, Game, Season, Player
+from .models import Article, Author, Game, MyISAMArticle, Player, Season, Tag
 
 
 class LookupTests(TestCase):
@@ -73,6 +76,8 @@ class LookupTests(TestCase):
     def test_iterator(self):
         # Each QuerySet gets iterator(), which is a generator that "lazily"
         # returns results using database-level iteration.
+        self.assertIsInstance(Article.objects.iterator(), collections.Iterator)
+
         self.assertQuerysetEqual(Article.objects.iterator(),
             [
                 'Article 5',
@@ -112,7 +117,7 @@ class LookupTests(TestCase):
         self.assertEqual(arts[self.a1.id], self.a1)
         self.assertEqual(arts[self.a2.id], self.a2)
         self.assertEqual(Article.objects.in_bulk([self.a3.id]), {self.a3.id: self.a3})
-        self.assertEqual(Article.objects.in_bulk(set([self.a3.id])), {self.a3.id: self.a3})
+        self.assertEqual(Article.objects.in_bulk({self.a3.id}), {self.a3.id: self.a3})
         self.assertEqual(Article.objects.in_bulk(frozenset([self.a3.id])), {self.a3.id: self.a3})
         self.assertEqual(Article.objects.in_bulk((self.a3.id,)), {self.a3.id: self.a3})
         self.assertEqual(Article.objects.in_bulk([1000]), {})
@@ -224,7 +229,11 @@ class LookupTests(TestCase):
                 {'name': self.au2.name, 'article__headline': self.a7.headline},
             ], transform=identity)
         self.assertQuerysetEqual(
-            Author.objects.values('name', 'article__headline', 'article__tag__name').order_by('name', 'article__headline', 'article__tag__name'),
+            (
+                Author.objects
+                .values('name', 'article__headline', 'article__tag__name')
+                .order_by('name', 'article__headline', 'article__tag__name')
+            ),
             [
                 {'name': self.au1.name, 'article__headline': self.a1.headline, 'article__tag__name': self.t1.name},
                 {'name': self.au1.name, 'article__headline': self.a2.headline, 'article__tag__name': self.t1.name},
@@ -306,7 +315,11 @@ class LookupTests(TestCase):
             ],
             transform=identity)
         self.assertQuerysetEqual(
-            Author.objects.values_list('name', 'article__headline', 'article__tag__name').order_by('name', 'article__headline', 'article__tag__name'),
+            (
+                Author.objects
+                .values_list('name', 'article__headline', 'article__tag__name')
+                .order_by('name', 'article__headline', 'article__tag__name')
+            ),
             [
                 (self.au1.name, self.a1.headline, self.t1.name),
                 (self.au1.name, self.a2.headline, self.t1.name),
@@ -436,7 +449,7 @@ class LookupTests(TestCase):
             ])
 
     def test_none(self):
-       # none() returns a QuerySet that behaves like any other QuerySet object
+        # none() returns a QuerySet that behaves like any other QuerySet object
         self.assertQuerysetEqual(Article.objects.none(), [])
         self.assertQuerysetEqual(
             Article.objects.none().filter(headline__startswith='Article'), [])
@@ -476,8 +489,9 @@ class LookupTests(TestCase):
             Article.objects.filter(headline__starts='Article')
             self.fail('FieldError not raised')
         except FieldError as ex:
-            self.assertEqual(str(ex), "Join on field 'headline' not permitted. "
-                             "Did you misspell 'starts' for the lookup type?")
+            self.assertEqual(
+                str(ex), "Unsupported lookup 'starts' for CharField "
+                "or join on the field not permitted.")
 
     def test_regex(self):
         # Create some articles with a bit more interesting headlines for testing field lookups:
@@ -628,7 +642,7 @@ class LookupTests(TestCase):
 
     def test_regex_non_ascii(self):
         """
-        Ensure that a regex lookup does not trip on non-ascii characters.
+        Ensure that a regex lookup does not trip on non-ASCII characters.
         """
         Player.objects.create(name='\u2660')
         Player.objects.get(name__regex='\u2660')
@@ -709,3 +723,55 @@ class LookupTests(TestCase):
         self.assertEqual(Player.objects.filter(games__season__gt=333).distinct().count(), 2)
         self.assertEqual(Player.objects.filter(games__season__year__gt=2010).distinct().count(), 2)
         self.assertEqual(Player.objects.filter(games__season__gt__gt=222).distinct().count(), 2)
+
+    def test_chain_date_time_lookups(self):
+        self.assertQuerysetEqual(
+            Article.objects.filter(pub_date__month__gt=7),
+            ['<Article: Article 5>', '<Article: Article 6>'],
+            ordered=False
+        )
+        self.assertQuerysetEqual(
+            Article.objects.filter(pub_date__day__gte=27),
+            ['<Article: Article 2>', '<Article: Article 3>',
+             '<Article: Article 4>', '<Article: Article 7>'],
+            ordered=False
+        )
+        self.assertQuerysetEqual(
+            Article.objects.filter(pub_date__hour__lt=8),
+            ['<Article: Article 1>', '<Article: Article 2>',
+             '<Article: Article 3>', '<Article: Article 4>',
+             '<Article: Article 7>'],
+            ordered=False
+        )
+        self.assertQuerysetEqual(
+            Article.objects.filter(pub_date__minute__lte=0),
+            ['<Article: Article 1>', '<Article: Article 2>',
+             '<Article: Article 3>', '<Article: Article 4>',
+             '<Article: Article 5>', '<Article: Article 6>',
+             '<Article: Article 7>'],
+            ordered=False
+        )
+
+
+class LookupTransactionTests(TransactionTestCase):
+    available_apps = ['lookup']
+
+    @skipUnless(connection.vendor == 'mysql', 'requires MySQL')
+    def test_mysql_lookup_search(self):
+        # To use fulltext indexes on MySQL either version 5.6 is needed, or one must use
+        # MyISAM tables. Neither of these combinations is currently available on CI, so
+        # lets manually create a MyISAM table for Article model.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "CREATE TEMPORARY TABLE myisam_article ("
+                "    id INTEGER PRIMARY KEY AUTO_INCREMENT, "
+                "    headline VARCHAR(100) NOT NULL "
+                ") ENGINE MYISAM")
+            dr = MyISAMArticle.objects.create(headline='Django Reinhardt')
+            MyISAMArticle.objects.create(headline='Ringo Star')
+            # NOTE: Needs to be created after the article has been saved.
+            cursor.execute(
+                'CREATE FULLTEXT INDEX myisam_article_ft ON myisam_article (headline)')
+            self.assertQuerysetEqual(
+                MyISAMArticle.objects.filter(headline__search='Reinhardt'),
+                [dr], lambda x: x)

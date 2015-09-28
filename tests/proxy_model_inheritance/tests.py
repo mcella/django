@@ -1,15 +1,15 @@
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import os
-import sys
 
-from django.apps import app_cache
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase
+from django.test.utils import extend_sys_path
 from django.utils._os import upath
 
-from .models import (ConcreteModel, ConcreteModelSubclass,
-    ConcreteModelSubclassProxy)
+from .models import (
+    ConcreteModel, ConcreteModelSubclass, ConcreteModelSubclassProxy,
+)
 
 
 class ProxyModelInheritanceTests(TransactionTestCase):
@@ -20,20 +20,14 @@ class ProxyModelInheritanceTests(TransactionTestCase):
     """
     available_apps = []
 
-    def setUp(self):
-        self.old_sys_path = sys.path[:]
-        sys.path.append(os.path.dirname(os.path.abspath(upath(__file__))))
-
-    def tearDown(self):
-        sys.path = self.old_sys_path
-
     def test_table_exists(self):
-        with app_cache._with_app('app1'), app_cache._with_app('app2'):
-            call_command('migrate', verbosity=0)
-            from .app1.models import ProxyModel
-            from .app2.models import NiceModel
-            self.assertEqual(NiceModel.objects.all().count(), 0)
-            self.assertEqual(ProxyModel.objects.all().count(), 0)
+        with extend_sys_path(os.path.dirname(os.path.abspath(upath(__file__)))):
+            with self.modify_settings(INSTALLED_APPS={'append': ['app1', 'app2']}):
+                call_command('migrate', verbosity=0, run_syncdb=True)
+                from app1.models import ProxyModel
+                from app2.models import NiceModel
+                self.assertEqual(NiceModel.objects.all().count(), 0)
+                self.assertEqual(ProxyModel.objects.all().count(), 0)
 
 
 class MultiTableInheritanceProxyTest(TestCase):

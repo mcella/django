@@ -1,2 +1,4 @@
-from .base import AppConfig                     # NOQA
-from .cache import app_cache, UnavailableApp    # NOQA
+from .config import AppConfig
+from .registry import apps
+
+__all__ = ['AppConfig', 'apps']

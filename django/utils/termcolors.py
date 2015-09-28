@@ -5,8 +5,8 @@ termcolors.py
 from django.utils import six
 
 color_names = ('black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white')
-foreground = dict((color_names[x], '3%s' % x) for x in range(8))
-background = dict((color_names[x], '4%s' % x) for x in range(8))
+foreground = {color_names[x]: '3%s' % x for x in range(8)}
+background = {color_names[x]: '4%s' % x for x in range(8)}
 
 RESET = '0'
 opt_dict = {'bold': '1', 'underscore': '4', 'blink': '5', 'reverse': '7', 'conceal': '8'}
@@ -76,6 +76,8 @@ LIGHT_PALETTE = 'light'
 PALETTES = {
     NOCOLOR_PALETTE: {
         'ERROR': {},
+        'SUCCESS': {},
+        'WARNING': {},
         'NOTICE': {},
         'SQL_FIELD': {},
         'SQL_COLTYPE': {},
@@ -95,6 +97,8 @@ PALETTES = {
     },
     DARK_PALETTE: {
         'ERROR': {'fg': 'red', 'opts': ('bold',)},
+        'SUCCESS': {'fg': 'green', 'opts': ('bold',)},
+        'WARNING': {'fg': 'yellow', 'opts': ('bold',)},
         'NOTICE': {'fg': 'red'},
         'SQL_FIELD': {'fg': 'green', 'opts': ('bold',)},
         'SQL_COLTYPE': {'fg': 'green'},
@@ -114,6 +118,8 @@ PALETTES = {
     },
     LIGHT_PALETTE: {
         'ERROR': {'fg': 'red', 'opts': ('bold',)},
+        'SUCCESS': {'fg': 'green', 'opts': ('bold',)},
+        'WARNING': {'fg': 'yellow', 'opts': ('bold',)},
         'NOTICE': {'fg': 'red'},
         'SQL_FIELD': {'fg': 'green', 'opts': ('bold',)},
         'SQL_COLTYPE': {'fg': 'green'},
@@ -163,7 +169,6 @@ def parse_color_setting(config_string):
 
     Valid options:
         'bold', 'underscore', 'blink', 'reverse', 'conceal'
-
     """
     if not config_string:
         return PALETTES[DEFAULT_PALETTE]

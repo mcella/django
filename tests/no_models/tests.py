@@ -1,10 +1,10 @@
-from django.apps import app_cache
-from django.test import TestCase
+from django.apps import apps
+from django.test import SimpleTestCase
 
 
-class NoModelTests(TestCase):
+class NoModelTests(SimpleTestCase):
 
     def test_no_models(self):
         """Test that it's possible to load an app with no models.py file."""
-        app_config = app_cache.get_app_config('no_models')
+        app_config = apps.get_app_config('no_models')
         self.assertIsNone(app_config.models_module)

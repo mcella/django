@@ -1,9 +1,9 @@
 from __future__ import unicode_literals
 
-from django.test import TestCase
 from django.core.exceptions import FieldError
+from django.test import TestCase
 
-from .models import Poll, Choice, OuterA, Inner, OuterB
+from .models import Choice, Inner, OuterA, OuterB, Poll
 
 
 class NullQueriesTests(TestCase):
@@ -44,9 +44,6 @@ class NullQueriesTests(TestCase):
 
         # Can't use None on anything other than __exact and __iexact
         self.assertRaises(ValueError, Choice.objects.filter, id__gt=None)
-
-        # Can't use None on anything other than __exact and __iexact
-        self.assertRaises(ValueError, Choice.objects.filter, foo__gt=None)
 
         # Related managers use __exact=None implicitly if the object hasn't been saved.
         p2 = Poll(question="How?")

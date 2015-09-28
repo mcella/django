@@ -1,19 +1,19 @@
-import os
 import errno
-import itertools
+import os
 from datetime import datetime
 
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
-from django.core.files import locks, File
+from django.core.files import File, locks
 from django.core.files.move import file_move_safe
-from django.utils.encoding import force_text, filepath_to_uri
+from django.utils._os import abspathu, safe_join
+from django.utils.crypto import get_random_string
+from django.utils.deconstruct import deconstructible
+from django.utils.encoding import filepath_to_uri, force_text
 from django.utils.functional import LazyObject
-from django.utils.module_loading import import_by_path
+from django.utils.module_loading import import_string
 from django.utils.six.moves.urllib.parse import urljoin
 from django.utils.text import get_valid_filename
-from django.utils._os import safe_join, abspathu
-
 
 __all__ = ('Storage', 'FileSystemStorage', 'DefaultStorage', 'default_storage')
 
@@ -33,7 +33,7 @@ class Storage(object):
         """
         return self._open(name, mode)
 
-    def save(self, name, content):
+    def save(self, name, content, max_length=None):
         """
         Saves new content to the file specified by name. The content should be
         a proper File object or any python file-like object, ready to be read
@@ -46,7 +46,7 @@ class Storage(object):
         if not hasattr(content, 'chunks'):
             content = File(content)
 
-        name = self.get_available_name(name)
+        name = self.get_available_name(name, max_length=max_length)
         name = self._save(name, content)
 
         # Store filenames with forward slashes, even on Windows
@@ -61,21 +61,35 @@ class Storage(object):
         """
         return get_valid_filename(name)
 
-    def get_available_name(self, name):
+    def get_available_name(self, name, max_length=None):
         """
         Returns a filename that's free on the target storage system, and
         available for new content to be written to.
         """
         dir_name, file_name = os.path.split(name)
         file_root, file_ext = os.path.splitext(file_name)
-        # If the filename already exists, add an underscore and a number (before
-        # the file extension, if one exists) to the filename until the generated
-        # filename doesn't exist.
-        count = itertools.count(1)
-        while self.exists(name):
+        # If the filename already exists, add an underscore and a random 7
+        # character alphanumeric string (before the file extension, if one
+        # exists) to the filename until the generated filename doesn't exist.
+        # Truncate original name if required, so the new filename does not
+        # exceed the max_length.
+        while self.exists(name) or (max_length and len(name) > max_length):
             # file_ext includes the dot.
-            name = os.path.join(dir_name, "%s_%s%s" % (file_root, next(count), file_ext))
-
+            name = os.path.join(dir_name, "%s_%s%s" % (file_root, get_random_string(7), file_ext))
+            if max_length is None:
+                continue
+            # Truncate file_root if max_length exceeded.
+            truncation = len(name) - max_length
+            if truncation > 0:
+                file_root = file_root[:-truncation]
+                # Entire file_root was truncated in attempt to find an available filename.
+                if not file_root:
+                    raise SuspiciousFileOperation(
+                        'Storage can not find an available filename for "%s". '
+                        'Please make sure that the corresponding file field '
+                        'allows sufficient "max_length".' % name
+                    )
+                name = os.path.join(dir_name, "%s_%s%s" % (file_root, get_random_string(7), file_ext))
         return name
 
     def path(self, name):
@@ -97,10 +111,10 @@ class Storage(object):
 
     def exists(self, name):
         """
-        Returns True if a file referened by the given name already exists in the
+        Returns True if a file referenced by the given name already exists in the
         storage system, or False if the name is available for a new file.
         """
-        raise NotImplementedError('subclasses of Storage must provide a exists() method')
+        raise NotImplementedError('subclasses of Storage must provide an exists() method')
 
     def listdir(self, path):
         """
@@ -144,6 +158,7 @@ class Storage(object):
         raise NotImplementedError('subclasses of Storage must provide a modified_time() method')
 
 
+@deconstructible
 class FileSystemStorage(Storage):
     """
     Standard filesystem storage
@@ -157,6 +172,8 @@ class FileSystemStorage(Storage):
         self.location = abspathu(self.base_location)
         if base_url is None:
             base_url = settings.MEDIA_URL
+        elif not base_url.endswith('/'):
+            base_url += '/'
         self.base_url = base_url
         self.file_permissions_mode = (
             file_permissions_mode if file_permissions_mode is not None
@@ -207,7 +224,6 @@ class FileSystemStorage(Storage):
                 # This file has a file path that we can move.
                 if hasattr(content, 'temporary_file_path'):
                     file_move_safe(content.temporary_file_path(), full_path)
-                    content.close()
 
                 # This is a normal uploadedfile that we can stream.
                 else:
@@ -226,7 +242,6 @@ class FileSystemStorage(Storage):
                                 _file = os.fdopen(fd, mode)
                             _file.write(chunk)
                     finally:
-                        content.close()
                         locks.unlock(fd)
                         if _file is not None:
                             _file.close()
@@ -276,11 +291,7 @@ class FileSystemStorage(Storage):
         return directories, files
 
     def path(self, name):
-        try:
-            path = safe_join(self.location, name)
-        except ValueError:
-            raise SuspiciousFileOperation("Attempted access to '%s' denied." % name)
-        return os.path.normpath(path)
+        return safe_join(self.location, name)
 
     def size(self, name):
         return os.path.getsize(self.path(name))
@@ -301,7 +312,7 @@ class FileSystemStorage(Storage):
 
 
 def get_storage_class(import_path=None):
-    return import_by_path(import_path or settings.DEFAULT_FILE_STORAGE)
+    return import_string(import_path or settings.DEFAULT_FILE_STORAGE)
 
 
 class DefaultStorage(LazyObject):
